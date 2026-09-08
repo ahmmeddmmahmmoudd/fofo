@@ -635,12 +635,12 @@ git commit -m "feat: add sqlite-backed express-session store"
 
 ---
 
-### Task 5: Auth middleware + signup/login/logout/me routes
+### Task 5: Auth middleware + signup/login/logout/me routes (with business_type)
 
 **Files:**
 - Create: `src/middleware/requireAuth.js`
 - Create: `src/routes/auth.js`
-- Modify: `src/app.js`
+- Modify: `src/app.js` — **extend the existing file, do not replace it.** `src/app.js` currently has `createApp(dbPath)` with a `/health` route and an `app.listen`/`server.close` override (added in Task 1, with a comment explaining it releases the db handle synchronously for Windows test cleanup — keep that override exactly as-is). Add the session middleware and the auth router into the existing function body, before the `app.locals.db = db;` line, and before the `app.listen` override.
 - Test: `tests/auth-routes.test.js`
 
 **Interfaces:**
@@ -648,7 +648,8 @@ git commit -m "feat: add sqlite-backed express-session store"
 - Produces:
   - `requireAuth(req, res, next)` middleware — 401s if `!req.session.businessId`.
   - `createAuthRouter(db) -> express.Router` mounted at `/api/auth` with routes `POST /signup`, `POST /login`, `POST /logout`, `GET /me`.
-  - `req.session.businessId: number` and `req.session.businessName: string` set on successful signup/login — later tasks (rooms, sessions, crm routes) read `req.session.businessId` to scope queries.
+  - `req.session.businessId: number` and `req.session.businessName: string` set on successful signup/login — later tasks (units, bookings, crm routes) read `req.session.businessId` to scope queries.
+  - Signup now requires `business_type` (`'gaming'` or `'restaurant'`) and applies that vertical's policy defaults: gaming → `grace_window_minutes=60, deposit_required=0`; restaurant → `grace_window_minutes=30, deposit_required=1, deposit_amount=50, refund_cutoff_minutes=120`. All four fields can be overridden by optional fields in the signup request body (`grace_window_minutes`, `deposit_required`, `deposit_amount`, `refund_cutoff_minutes`) — useful for tests and for an owner who wants non-default policy from day one; there's no separate settings-update endpoint in Phase 1.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -685,7 +686,7 @@ test('signup creates a business and returns 201', async () => {
   const res = await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Alpha Lounge', email: 'a@test.com', password: 'pass1234' })
+    body: JSON.stringify({ name: 'Alpha Lounge', email: 'a@test.com', password: 'pass1234', business_type: 'gaming' })
   });
   const body = await res.json();
   assert.equal(res.status, 201);
@@ -696,7 +697,7 @@ test('signup creates a business and returns 201', async () => {
 
 test('signup with duplicate email returns 409', async () => {
   const ctx = startApp('tmp-auth2.db');
-  const payload = { name: 'A', email: 'dup@test.com', password: 'pass1234' };
+  const payload = { name: 'A', email: 'dup@test.com', password: 'pass1234', business_type: 'gaming' };
   await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
   });
@@ -711,7 +712,7 @@ test('login with correct credentials returns 200 and sets a session cookie', asy
   const ctx = startApp('tmp-auth3.db');
   await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'A', email: 'login@test.com', password: 'pass1234' })
+    body: JSON.stringify({ name: 'A', email: 'login@test.com', password: 'pass1234', business_type: 'gaming' })
   });
   const res = await fetch(`${ctx.base}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -726,7 +727,7 @@ test('login with wrong password returns 401', async () => {
   const ctx = startApp('tmp-auth4.db');
   await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'A', email: 'wp@test.com', password: 'pass1234' })
+    body: JSON.stringify({ name: 'A', email: 'wp@test.com', password: 'pass1234', business_type: 'gaming' })
   });
   const res = await fetch(`${ctx.base}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -747,7 +748,7 @@ test('GET /api/auth/me with a valid session returns the business', async () => {
   const ctx = startApp('tmp-auth6.db');
   await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Alpha', email: 'me@test.com', password: 'pass1234' })
+    body: JSON.stringify({ name: 'Alpha', email: 'me@test.com', password: 'pass1234', business_type: 'restaurant' })
   });
   const loginRes = await fetch(`${ctx.base}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -765,7 +766,7 @@ test('logout destroys the session', async () => {
   const ctx = startApp('tmp-auth7.db');
   await fetch(`${ctx.base}/api/auth/signup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'A', email: 'lo@test.com', password: 'pass1234' })
+    body: JSON.stringify({ name: 'A', email: 'lo@test.com', password: 'pass1234', business_type: 'gaming' })
   });
   const loginRes = await fetch(`${ctx.base}/api/auth/login`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -775,6 +776,71 @@ test('logout destroys the session', async () => {
   await fetch(`${ctx.base}/api/auth/logout`, { method: 'POST', headers: { Cookie: cookie } });
   const meRes = await fetch(`${ctx.base}/api/auth/me`, { headers: { Cookie: cookie } });
   assert.equal(meRes.status, 401);
+  ctx.close();
+});
+
+test('signup without business_type returns 400', async () => {
+  const ctx = startApp('tmp-auth8.db');
+  const res = await fetch(`${ctx.base}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'A', email: 'nobt@test.com', password: 'pass1234' })
+  });
+  assert.equal(res.status, 400);
+  ctx.close();
+});
+
+test('signup with invalid business_type returns 400', async () => {
+  const ctx = startApp('tmp-auth9.db');
+  const res = await fetch(`${ctx.base}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'A', email: 'badbt@test.com', password: 'pass1234', business_type: 'salon' })
+  });
+  assert.equal(res.status, 400);
+  ctx.close();
+});
+
+test('gaming signup gets gaming policy defaults', async () => {
+  const ctx = startApp('tmp-auth10.db');
+  const res = await fetch(`${ctx.base}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Gaming Biz', email: 'gaming@test.com', password: 'pass1234', business_type: 'gaming' })
+  });
+  const body = await res.json();
+  assert.equal(res.status, 201);
+  assert.equal(body.business_type, 'gaming');
+  assert.equal(body.grace_window_minutes, 60);
+  assert.equal(body.deposit_required, false);
+  ctx.close();
+});
+
+test('restaurant signup gets restaurant policy defaults', async () => {
+  const ctx = startApp('tmp-auth11.db');
+  const res = await fetch(`${ctx.base}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Restaurant Biz', email: 'restaurant@test.com', password: 'pass1234', business_type: 'restaurant' })
+  });
+  const body = await res.json();
+  assert.equal(res.status, 201);
+  assert.equal(body.business_type, 'restaurant');
+  assert.equal(body.grace_window_minutes, 30);
+  assert.equal(body.deposit_required, true);
+  assert.equal(body.deposit_amount, 50);
+  ctx.close();
+});
+
+test('signup can override policy defaults with explicit fields', async () => {
+  const ctx = startApp('tmp-auth12.db');
+  const res = await fetch(`${ctx.base}/api/auth/signup`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: 'Custom Biz', email: 'custom@test.com', password: 'pass1234',
+      business_type: 'restaurant', grace_window_minutes: 45, deposit_amount: 75
+    })
+  });
+  const body = await res.json();
+  assert.equal(res.status, 201);
+  assert.equal(body.grace_window_minutes, 45);
+  assert.equal(body.deposit_amount, 75);
   ctx.close();
 });
 ```
@@ -806,28 +872,63 @@ const express = require('express');
 const { hashPassword, verifyPassword } = require('../authUtils');
 const { requireAuth } = require('../middleware/requireAuth');
 
+const VALID_BUSINESS_TYPES = ['gaming', 'restaurant'];
+const POLICY_DEFAULTS = {
+  gaming: { grace_window_minutes: 60, deposit_required: 0, deposit_amount: null, refund_cutoff_minutes: null },
+  restaurant: { grace_window_minutes: 30, deposit_required: 1, deposit_amount: 50, refund_cutoff_minutes: 120 }
+};
+
+function toPublicBusiness(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    business_type: row.business_type,
+    grace_window_minutes: row.grace_window_minutes,
+    deposit_required: !!row.deposit_required,
+    deposit_amount: row.deposit_amount,
+    refund_cutoff_minutes: row.refund_cutoff_minutes,
+    reliability_score: row.reliability_score
+  };
+}
+
 function createAuthRouter(db) {
   const router = express.Router();
 
   router.post('/signup', (req, res) => {
-    const { name, email, password } = req.body || {};
+    const { name, email, password, business_type } = req.body || {};
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'name, email and password are required' });
+    }
+    if (!VALID_BUSINESS_TYPES.includes(business_type)) {
+      return res.status(400).json({ error: "business_type must be 'gaming' or 'restaurant'" });
     }
     const existing = db.prepare('SELECT id FROM businesses WHERE email = ?').get(email);
     if (existing) {
       return res.status(409).json({ error: 'An account with this email already exists' });
     }
+
+    const defaults = POLICY_DEFAULTS[business_type];
+    const graceWindowMinutes = req.body.grace_window_minutes ?? defaults.grace_window_minutes;
+    const depositRequired = req.body.deposit_required ?? defaults.deposit_required;
+    const depositAmount = req.body.deposit_amount ?? defaults.deposit_amount;
+    const refundCutoffMinutes = req.body.refund_cutoff_minutes ?? defaults.refund_cutoff_minutes;
+
     const passwordHash = hashPassword(password);
     const createdAt = new Date().toISOString();
     const info = db
-      .prepare('INSERT INTO businesses (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)')
-      .run(name, email, passwordHash, createdAt);
+      .prepare(
+        `INSERT INTO businesses
+           (name, email, password_hash, business_type, grace_window_minutes, deposit_required, deposit_amount, refund_cutoff_minutes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(name, email, passwordHash, business_type, graceWindowMinutes, depositRequired ? 1 : 0, depositAmount, refundCutoffMinutes, createdAt);
 
     req.session.businessId = info.lastInsertRowid;
     req.session.businessName = name;
 
-    res.status(201).json({ id: info.lastInsertRowid, name, email });
+    const row = db.prepare('SELECT * FROM businesses WHERE id = ?').get(info.lastInsertRowid);
+    res.status(201).json(toPublicBusiness(row));
   });
 
   router.post('/login', (req, res) => {
@@ -841,7 +942,7 @@ function createAuthRouter(db) {
     }
     req.session.businessId = business.id;
     req.session.businessName = business.name;
-    res.status(200).json({ id: business.id, name: business.name, email: business.email });
+    res.status(200).json(toPublicBusiness(business));
   });
 
   router.post('/logout', (req, res) => {
@@ -852,12 +953,12 @@ function createAuthRouter(db) {
 
   router.get('/me', requireAuth, (req, res) => {
     const business = db
-      .prepare('SELECT id, name, email FROM businesses WHERE id = ?')
+      .prepare('SELECT * FROM businesses WHERE id = ?')
       .get(req.session.businessId);
     if (!business) {
       return res.status(401).json({ error: 'Not authenticated' });
     }
-    res.status(200).json(business);
+    res.status(200).json(toPublicBusiness(business));
   });
 
   return router;
@@ -866,7 +967,48 @@ function createAuthRouter(db) {
 module.exports = { createAuthRouter };
 ```
 
-- [ ] **Step 5: Wire session middleware and the auth router into src/app.js**
+- [ ] **Step 5: Extend the existing src/app.js — add session middleware and the auth router**
+
+`src/app.js` currently looks like this (from Task 1, do not lose the `app.listen`/`server.close` override or its comment):
+
+```js
+// src/app.js
+const express = require('express');
+const { openDb } = require('./db');
+
+function createApp(dbPath) {
+  const db = openDb(dbPath);
+  const app = express();
+  app.use(express.json());
+
+  app.get('/health', (req, res) => {
+    res.json({ status: 'ok' });
+  });
+
+  app.locals.db = db;
+
+  // Override listen()/close() so the db file handle is released synchronously
+  // when the server closes — tests immediately unlink the db file after
+  // server.close(), and on Windows an open sqlite handle would make that
+  // fail with EBUSY if we waited for the async 'close' event instead.
+  const originalListen = app.listen;
+  app.listen = function(...args) {
+    const server = originalListen.apply(this, args);
+    const originalClose = server.close;
+    server.close = function(...closeArgs) {
+      db.close();
+      return originalClose.apply(this, closeArgs);
+    };
+    return server;
+  };
+
+  return app;
+}
+
+module.exports = { createApp };
+```
+
+Change it to this — add the two new `require`s at the top, insert the `session(...)` middleware and the auth router mount between `app.use(express.json())` and the `/health` route, and leave everything else (including the `app.listen` override) untouched:
 
 ```js
 // src/app.js
@@ -883,7 +1025,7 @@ function createApp(dbPath) {
 
   app.use(session({
     store: new SqliteSessionStore(db),
-    secret: process.env.SESSION_SECRET || 'fofo-dev-secret-change-in-production',
+    secret: process.env.SESSION_SECRET || 'fady-dev-secret-change-in-production',
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -900,6 +1042,22 @@ function createApp(dbPath) {
   app.use('/api/auth', createAuthRouter(db));
 
   app.locals.db = db;
+
+  // Override listen()/close() so the db file handle is released synchronously
+  // when the server closes — tests immediately unlink the db file after
+  // server.close(), and on Windows an open sqlite handle would make that
+  // fail with EBUSY if we waited for the async 'close' event instead.
+  const originalListen = app.listen;
+  app.listen = function(...args) {
+    const server = originalListen.apply(this, args);
+    const originalClose = server.close;
+    server.close = function(...closeArgs) {
+      db.close();
+      return originalClose.apply(this, closeArgs);
+    };
+    return server;
+  };
+
   return app;
 }
 
