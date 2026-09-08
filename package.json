@@ -1,0 +1,16 @@
+{
+  "name": "fofo",
+  "version": "1.0.0",
+  "description": "fofo - booking and CRM platform for PlayStation lounge owners",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.3.0",
+    "bcryptjs": "^2.4.3",
+    "express": "^4.19.2",
+    "express-session": "^1.18.0"
+  }
+}
