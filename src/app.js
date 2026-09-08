@@ -13,7 +13,10 @@ function createApp(dbPath) {
 
   app.locals.db = db;
 
-  // Wrap listen() to close database when server closes
+  // Override listen()/close() so the db file handle is released synchronously
+  // when the server closes — tests immediately unlink the db file after
+  // server.close(), and on Windows an open sqlite handle would make that
+  // fail with EBUSY if we waited for the async 'close' event instead.
   const originalListen = app.listen;
   app.listen = function(...args) {
     const server = originalListen.apply(this, args);
