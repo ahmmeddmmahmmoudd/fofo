@@ -1,15 +1,32 @@
 // src/app.js
 const express = require('express');
+const session = require('express-session');
 const { openDb } = require('./db');
+const { SqliteSessionStore } = require('./sessionStore');
+const { createAuthRouter } = require('./routes/auth');
 
 function createApp(dbPath) {
   const db = openDb(dbPath);
   const app = express();
   app.use(express.json());
 
+  app.use(session({
+    store: new SqliteSessionStore(db),
+    secret: process.env.SESSION_SECRET || 'fady-dev-secret-change-in-production',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      maxAge: 7 * 24 * 60 * 60 * 1000,
+      httpOnly: true,
+      sameSite: 'lax'
+    }
+  }));
+
   app.get('/health', (req, res) => {
     res.json({ status: 'ok' });
   });
+
+  app.use('/api/auth', createAuthRouter(db));
 
   app.locals.db = db;
 
