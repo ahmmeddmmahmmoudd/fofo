@@ -1,32 +1,36 @@
-# fofo Phase 1 Implementation Plan
+# fady Phase 1 Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the fofo Phase 1 core platform — a multi-tenant Node.js web app where a PlayStation-lounge business owner signs up, manages rooms, toggles room occupancy (empty/busy), and sees automatically-computed revenue and a client CRM view.
+**Goal:** Build the fady Phase 1 core platform — a multi-tenant Node.js web app where a gaming-lounge OR restaurant/cafe business owner signs up, manages bookable units (rooms or tables), toggles occupancy, runs a booking lifecycle with a no-show/cancellation policy, and sees automatically-computed revenue, CRM, and reliability data.
 
-**Architecture:** A single Node.js + Express server serves a JSON API and static frontend files from one process. Data lives in a SQLite file (`data/fofo.db`) accessed synchronously via Node's built-in `node:sqlite` module (`DatabaseSync`) — no native compilation step, unlike third-party SQLite bindings. Auth is cookie-based sessions backed by a small custom SQLite-backed session store (so logins survive server restarts) with passwords hashed via `bcryptjs`. The frontend is plain HTML/CSS/JS using `fetch`, no build step, with an Arabic/English toggle and RTL support.
+**Architecture:** A single Node.js + Express server serves a JSON API and static frontend files from one process. Data lives in a SQLite file (`data/fady.db`) accessed synchronously via Node's built-in `node:sqlite` module (`DatabaseSync`) — no native compilation step, unlike third-party SQLite bindings. Auth is cookie-based sessions backed by a small custom SQLite-backed session store (so logins survive server restarts) with passwords hashed via `bcryptjs`. The frontend is plain HTML/CSS/JS using `fetch`, no build step, with an Arabic/English toggle and RTL support.
 
-> **Amendment (ruling recorded during Task 1 execution):** the plan originally specified `better-sqlite3`. That package requires native compilation and failed on the target Windows dev machine (no Visual Studio Build Tools), and would likely fail the same way on many hosting providers without a C++ toolchain. It was replaced with Node's built-in `node:sqlite` (`DatabaseSync`), which has a compatible synchronous API (`.exec()`, `.prepare(sql).run()/.get()/.all()`, `run()` returns `{changes, lastInsertRowid}`) and needs no native dependency at all. Requires Node >= 24.0.0 (the verified-working version — pinned via `engines` in package.json).
+> **Amendment 1 (ruling recorded during Task 1 execution):** the plan originally specified `better-sqlite3`. That package requires native compilation and failed on the target Windows dev machine (no Visual Studio Build Tools), and would likely fail the same way on many hosting providers without a C++ toolchain. It was replaced with Node's built-in `node:sqlite` (`DatabaseSync`), which has a compatible synchronous API (`.exec()`, `.prepare(sql).run()/.get()/.all()`, `run()` returns `{changes, lastInsertRowid}`) and needs no native dependency at all. Requires Node >= 24.0.0 (the verified-working version — pinned via `engines` in package.json).
+
+> **Amendment 2 (ruling recorded after Task 3, mid-build scope revision):** the product is rebranded fofo -> fady, and now supports two business verticals (gaming lounges + restaurants/cafes) from Phase 1 rather than one, sharing a single booking/cancellation/reliability policy engine. This supersedes `docs/superpowers/specs/2026-09-08-fofo-phase1-design.md` with `docs/superpowers/specs/2026-09-08-fady-phase1-v2-design.md`. Tasks 1, 3, 4 (scaffold, password hashing, session store) are vertical-agnostic and stand as originally built. Task 2 (schema) and Tasks 5-12 (routes, CRM, frontend, docs) are rewritten in place below, task by task, as the build reaches them — each task's section reflects the current, correct requirements at the time it's briefed; there is no separate "v1" text left to confuse a reader.
 
 **Tech Stack:** Node.js (>=24.0.0), Express, node:sqlite (built-in), express-session, bcryptjs, Node's built-in `node:test` runner.
 
-**Spec:** `docs/superpowers/specs/2026-09-08-fofo-phase1-design.md`
+**Spec:** `docs/superpowers/specs/2026-09-08-fady-phase1-v2-design.md`
 
 ## Global Constraints
 
 - Every `/api/*` route except `/api/auth/signup` and `/api/auth/login` requires an authenticated session (401 if not authenticated).
-- All room/session/CRM data is scoped to `req.session.businessId` — a business must never see or modify another business's data. Cross-tenant access attempts return 404 (not 403), so as not to leak whether a resource ID exists for another tenant.
-- Revenue = `hours_elapsed * hourly_rate`, rounded to 2 decimal places, computed server-side only (never trust a client-supplied revenue value).
+- All unit/booking/CRM data is scoped to `req.session.businessId` — a business must never see or modify another business's data. Cross-tenant access attempts return 404 (not 403), so as not to leak whether a resource ID exists for another tenant.
+- `business_type` is `'gaming'` or `'restaurant'`, set at signup and immutable afterward (changing vertical after units/bookings exist is out of scope for Phase 1).
+- Gaming revenue = `hours_elapsed * hourly_rate`, rounded to 2 decimal places, computed server-side only. Restaurant revenue in Phase 1 = the booking's `deposit_amount` (real order totals are a later phase). Never trust a client-supplied revenue value.
 - Passwords are always stored as bcrypt hashes (`bcryptjs`), never plaintext.
 - Timestamps stored as ISO 8601 strings (`new Date().toISOString()`).
-- UI strings come from `public/js/i18n.js`; Arabic is the default language, `dir="rtl"` when Arabic is active.
+- A booking's `grace_window_minutes` and `deposit_amount` are copied from the business's current policy settings at creation time and never recomputed from a possibly-since-changed policy — a booking's terms are fixed at the moment it's made.
+- UI strings come from `public/js/i18n.js`; Arabic is the default language, `dir="rtl"` when Arabic is active. Unit/booking labels are vertical-aware ("Room"/"PS Type" vs "Table"/"Capacity").
 
 ---
 
 ## File Structure
 
 ```
-fofo/
+fofo-phase1-core-platform/          (worktree directory name; package/product name is "fady")
   package.json
   server.js                      # entry point: opens DB, creates app, listens
   .gitignore
@@ -39,11 +43,11 @@ fofo/
       requireAuth.js             # requireAuth(req,res,next)
     routes/
       auth.js                    # createAuthRouter(db)
-      rooms.js                   # createRoomsRouter(db)
-      sessions.js                # createSessionsRouter(db) (play-session start/end)
+      units.js                   # createUnitsRouter(db) (rooms/tables CRUD)
+      bookings.js                # createBookingsRouter(db) (start/end/cancel/no-show/overbooking)
       crm.js                     # createCrmRouter(db)
   public/
-    login.html                   # signup/login page
+    login.html                   # signup/login + business_type page
     index.html                   # dashboard shell
     css/style.css
     js/i18n.js
@@ -56,8 +60,8 @@ fofo/
     authUtils.test.js
     sessionStore.test.js
     auth-routes.test.js
-    rooms-routes.test.js
-    sessions-routes.test.js
+    units-routes.test.js
+    bookings-routes.test.js
     crm-routes.test.js
   data/
     .gitkeep
@@ -221,7 +225,7 @@ git commit -m "feat: scaffold express app with health check endpoint"
 
 ---
 
-### Task 2: Database module with full schema
+### Task 2: Database module with full multi-vertical schema
 
 **Files:**
 - Modify: `src/db.js`
@@ -229,7 +233,7 @@ git commit -m "feat: scaffold express app with health check endpoint"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `openDb(dbPath: string) -> DatabaseSync` where the returned `node:sqlite` instance has tables `businesses`, `rooms`, `play_sessions`, `sessions_store` created (`CREATE TABLE IF NOT EXISTS`).
+- Produces: `openDb(dbPath: string) -> DatabaseSync` where the returned `node:sqlite` instance has tables `businesses`, `units`, `bookings`, `overbooking_incidents`, `sessions_store` created (`CREATE TABLE IF NOT EXISTS`). `businesses.business_type` is `'gaming'` or `'restaurant'`; `units` and `bookings` are shared by both verticals via nullable vertical-specific columns (see the spec's Data Model section, reproduced in full below).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -251,27 +255,55 @@ test('openDb creates all required tables', () => {
   ).all().map(r => r.name);
 
   assert.ok(tables.includes('businesses'));
-  assert.ok(tables.includes('rooms'));
-  assert.ok(tables.includes('play_sessions'));
+  assert.ok(tables.includes('units'));
+  assert.ok(tables.includes('bookings'));
+  assert.ok(tables.includes('overbooking_incidents'));
   assert.ok(tables.includes('sessions_store'));
 
   db.close();
   fs.unlinkSync(dbPath);
 });
 
-test('can insert and read a business row', () => {
+test('can insert and read a gaming business row with policy defaults', () => {
   const dbPath = path.join(__dirname, 'tmp-db2.db');
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
   const db = openDb(dbPath);
 
   const info = db.prepare(
-    `INSERT INTO businesses (name, email, password_hash, created_at)
-     VALUES (?, ?, ?, ?)`
-  ).run('Alpha Lounge', 'owner@alpha.test', 'hashedpw', new Date().toISOString());
+    `INSERT INTO businesses (name, email, password_hash, business_type, grace_window_minutes, deposit_required, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run('Alpha Lounge', 'owner@alpha.test', 'hashedpw', 'gaming', 60, 0, new Date().toISOString());
 
   const row = db.prepare('SELECT * FROM businesses WHERE id = ?').get(info.lastInsertRowid);
   assert.equal(row.name, 'Alpha Lounge');
-  assert.equal(row.email, 'owner@alpha.test');
+  assert.equal(row.business_type, 'gaming');
+  assert.equal(row.grace_window_minutes, 60);
+  assert.equal(row.reliability_score, 100);
+
+  db.close();
+  fs.unlinkSync(dbPath);
+});
+
+test('can insert a gaming unit and a restaurant unit with vertical-specific columns', () => {
+  const dbPath = path.join(__dirname, 'tmp-db3.db');
+  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  const db = openDb(dbPath);
+
+  const biz = db.prepare(
+    `INSERT INTO businesses (name, email, password_hash, business_type, grace_window_minutes, deposit_required, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run('Biz', 'biz@test.com', 'hash', 'gaming', 60, 0, new Date().toISOString());
+
+  const unitInfo = db.prepare(
+    `INSERT INTO units (business_id, name, ps_type, hourly_rate, created_at)
+     VALUES (?, ?, ?, ?, ?)`
+  ).run(biz.lastInsertRowid, 'Room 1', 'PS5', 60, new Date().toISOString());
+
+  const unit = db.prepare('SELECT * FROM units WHERE id = ?').get(unitInfo.lastInsertRowid);
+  assert.equal(unit.ps_type, 'PS5');
+  assert.equal(unit.hourly_rate, 60);
+  assert.equal(unit.capacity, null);
+  assert.equal(unit.status, 'empty');
 
   db.close();
   fs.unlinkSync(dbPath);
@@ -300,28 +332,51 @@ function openDb(dbPath) {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
+      business_type TEXT NOT NULL,
+      grace_window_minutes INTEGER NOT NULL DEFAULT 60,
+      deposit_required INTEGER NOT NULL DEFAULT 0,
+      deposit_amount REAL,
+      refund_cutoff_minutes INTEGER,
+      reliability_score REAL NOT NULL DEFAULT 100,
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS rooms (
+    CREATE TABLE IF NOT EXISTS units (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       business_id INTEGER NOT NULL REFERENCES businesses(id),
       name TEXT NOT NULL,
-      ps_type TEXT NOT NULL,
-      hourly_rate REAL NOT NULL,
       status TEXT NOT NULL DEFAULT 'empty',
-      created_at TEXT NOT NULL
+      created_at TEXT NOT NULL,
+      ps_type TEXT,
+      hourly_rate REAL,
+      capacity INTEGER
     );
 
-    CREATE TABLE IF NOT EXISTS play_sessions (
+    CREATE TABLE IF NOT EXISTS bookings (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      room_id INTEGER NOT NULL REFERENCES rooms(id),
+      unit_id INTEGER NOT NULL REFERENCES units(id),
       business_id INTEGER NOT NULL REFERENCES businesses(id),
       client_name TEXT NOT NULL,
       client_phone TEXT NOT NULL,
-      started_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      scheduled_start TEXT NOT NULL,
+      grace_window_minutes INTEGER NOT NULL,
+      auto_cancel_at TEXT NOT NULL,
+      started_at TEXT,
       ended_at TEXT,
-      revenue REAL
+      cancelled_at TEXT,
+      cancelled_by TEXT,
+      revenue REAL,
+      deposit_amount REAL,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS overbooking_incidents (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      business_id INTEGER NOT NULL REFERENCES businesses(id),
+      booking_id INTEGER NOT NULL REFERENCES bookings(id),
+      logged_at TEXT NOT NULL,
+      note TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sessions_store (
@@ -330,9 +385,10 @@ function openDb(dbPath) {
       expires INTEGER NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_rooms_business ON rooms(business_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_business ON play_sessions(business_id);
-    CREATE INDEX IF NOT EXISTS idx_sessions_room ON play_sessions(room_id);
+    CREATE INDEX IF NOT EXISTS idx_units_business ON units(business_id);
+    CREATE INDEX IF NOT EXISTS idx_bookings_business ON bookings(business_id);
+    CREATE INDEX IF NOT EXISTS idx_bookings_unit ON bookings(unit_id);
+    CREATE INDEX IF NOT EXISTS idx_incidents_business ON overbooking_incidents(business_id);
   `);
 
   return db;
@@ -344,13 +400,13 @@ module.exports = { openDb };
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm test`
-Expected: PASS (all tests, including Task 1's health test)
+Expected: PASS (all tests, including Task 1's health test and Task 3's authUtils tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/db.js tests/db.test.js
-git commit -m "feat: add full sqlite schema for businesses, rooms, play_sessions"
+git commit -m "feat: add multi-vertical sqlite schema (businesses/units/bookings/overbooking_incidents)"
 ```
 
 ---
