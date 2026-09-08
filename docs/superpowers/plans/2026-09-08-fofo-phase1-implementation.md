@@ -4,9 +4,11 @@
 
 **Goal:** Build the fofo Phase 1 core platform — a multi-tenant Node.js web app where a PlayStation-lounge business owner signs up, manages rooms, toggles room occupancy (empty/busy), and sees automatically-computed revenue and a client CRM view.
 
-**Architecture:** A single Node.js + Express server serves a JSON API and static frontend files from one process. Data lives in a SQLite file (`data/fofo.db`) accessed synchronously via `better-sqlite3`. Auth is cookie-based sessions backed by a small custom SQLite-backed session store (so logins survive server restarts) with passwords hashed via `bcryptjs`. The frontend is plain HTML/CSS/JS using `fetch`, no build step, with an Arabic/English toggle and RTL support.
+**Architecture:** A single Node.js + Express server serves a JSON API and static frontend files from one process. Data lives in a SQLite file (`data/fofo.db`) accessed synchronously via Node's built-in `node:sqlite` module (`DatabaseSync`) — no native compilation step, unlike third-party SQLite bindings. Auth is cookie-based sessions backed by a small custom SQLite-backed session store (so logins survive server restarts) with passwords hashed via `bcryptjs`. The frontend is plain HTML/CSS/JS using `fetch`, no build step, with an Arabic/English toggle and RTL support.
 
-**Tech Stack:** Node.js, Express, better-sqlite3, express-session, bcryptjs, supertest (dev/test only), Node's built-in `node:test` runner.
+> **Amendment (ruling recorded during Task 1 execution):** the plan originally specified `better-sqlite3`. That package requires native compilation and failed on the target Windows dev machine (no Visual Studio Build Tools), and would likely fail the same way on many hosting providers without a C++ toolchain. It was replaced with Node's built-in `node:sqlite` (`DatabaseSync`), which has a compatible synchronous API (`.exec()`, `.prepare(sql).run()/.get()/.all()`, `run()` returns `{changes, lastInsertRowid}`) and needs no native dependency at all. Requires Node >= 24.0.0 (the verified-working version — pinned via `engines` in package.json).
+
+**Tech Stack:** Node.js (>=24.0.0), Express, node:sqlite (built-in), express-session, bcryptjs, Node's built-in `node:test` runner.
 
 **Spec:** `docs/superpowers/specs/2026-09-08-fofo-phase1-design.md`
 
@@ -30,7 +32,7 @@ fofo/
   .gitignore
   src/
     app.js                       # createApp(dbPath) -> configured Express app
-    db.js                        # openDb(dbPath) -> better-sqlite3 instance + schema
+    db.js                        # openDb(dbPath) -> node:sqlite DatabaseSync instance + schema
     authUtils.js                 # hashPassword / verifyPassword
     sessionStore.js              # SqliteSessionStore (express-session Store)
     middleware/
@@ -117,12 +119,14 @@ Expected: FAIL — `Cannot find module '../src/app'`
   "version": "1.0.0",
   "description": "fofo - booking and CRM platform for PlayStation lounge owners",
   "main": "server.js",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/"
   },
   "dependencies": {
-    "better-sqlite3": "^11.3.0",
     "bcryptjs": "^2.4.3",
     "express": "^4.19.2",
     "express-session": "^1.18.0"
@@ -172,10 +176,10 @@ module.exports = { createApp };
 
 ```js
 // src/db.js
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 
 function openDb(dbPath) {
-  const db = new Database(dbPath);
+  const db = new DatabaseSync(dbPath);
   return db;
 }
 
@@ -200,8 +204,8 @@ app.listen(PORT, () => {
 
 - [ ] **Step 9: Install dependencies**
 
-Run: `cd "D:\Ai Agents\Claude\Artifacts\fofo" && npm install`
-Expected: installs express, better-sqlite3, bcryptjs, express-session without errors.
+Run: `cd "D:\Ai Agents\Claude\Artifacts\fofo-phase1-core-platform" && npm install`
+Expected: installs express, bcryptjs, express-session without errors (node:sqlite is built into Node, no package needed).
 
 - [ ] **Step 10: Run test to verify it passes**
 
@@ -225,7 +229,7 @@ git commit -m "feat: scaffold express app with health check endpoint"
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `openDb(dbPath: string) -> Database` where the returned `better-sqlite3` instance has tables `businesses`, `rooms`, `play_sessions`, `sessions_store` created (`CREATE TABLE IF NOT EXISTS`).
+- Produces: `openDb(dbPath: string) -> DatabaseSync` where the returned `node:sqlite` instance has tables `businesses`, `rooms`, `play_sessions`, `sessions_store` created (`CREATE TABLE IF NOT EXISTS`).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -283,12 +287,12 @@ Expected: FAIL — no such table: businesses
 
 ```js
 // src/db.js
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 
 function openDb(dbPath) {
-  const db = new Database(dbPath);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = new DatabaseSync(dbPath);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS businesses (
