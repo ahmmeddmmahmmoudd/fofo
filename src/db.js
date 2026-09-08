@@ -1,8 +1,8 @@
 // src/db.js
-const Database = require('better-sqlite3');
+const { DatabaseSync } = require('node:sqlite');
 
 function openDb(dbPath) {
-  const db = new Database(dbPath);
+  const db = new DatabaseSync(dbPath);
   return db;
 }
 

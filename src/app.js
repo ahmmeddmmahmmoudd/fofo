@@ -12,6 +12,19 @@ function createApp(dbPath) {
   });
 
   app.locals.db = db;
+
+  // Wrap listen() to close database when server closes
+  const originalListen = app.listen;
+  app.listen = function(...args) {
+    const server = originalListen.apply(this, args);
+    const originalClose = server.close;
+    server.close = function(...closeArgs) {
+      db.close();
+      return originalClose.apply(this, closeArgs);
+    };
+    return server;
+  };
+
   return app;
 }
 
