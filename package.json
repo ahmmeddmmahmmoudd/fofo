@@ -1,14 +1,14 @@
 {
-  "name": "fofo",
+  "name": "fady",
   "version": "1.0.0",
-  "description": "fofo - booking and CRM platform for PlayStation lounge owners",
+  "description": "fady - multi-vertical booking and CRM platform for gaming lounges and restaurants",
   "main": "server.js",
   "engines": {
     "node": ">=24.0.0"
   },
   "scripts": {
     "start": "node server.js",
-    "test": "node --test tests/"
+    "test": "node --test"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
