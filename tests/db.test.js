@@ -44,7 +44,7 @@ test('can insert and read a gaming business row with policy defaults', () => {
   fs.unlinkSync(dbPath);
 });
 
-test('can insert a gaming unit and a restaurant unit with vertical-specific columns', () => {
+test('can insert a gaming unit with ps_type and hourly_rate', () => {
   const dbPath = path.join(__dirname, 'tmp-db3.db');
   if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
   const db = openDb(dbPath);
@@ -52,7 +52,7 @@ test('can insert a gaming unit and a restaurant unit with vertical-specific colu
   const biz = db.prepare(
     `INSERT INTO businesses (name, email, password_hash, business_type, grace_window_minutes, deposit_required, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run('Biz', 'biz@test.com', 'hash', 'gaming', 60, 0, new Date().toISOString());
+  ).run('Gaming Biz', 'gaming@test.com', 'hash', 'gaming', 60, 0, new Date().toISOString());
 
   const unitInfo = db.prepare(
     `INSERT INTO units (business_id, name, ps_type, hourly_rate, created_at)
@@ -63,6 +63,31 @@ test('can insert a gaming unit and a restaurant unit with vertical-specific colu
   assert.equal(unit.ps_type, 'PS5');
   assert.equal(unit.hourly_rate, 60);
   assert.equal(unit.capacity, null);
+  assert.equal(unit.status, 'empty');
+
+  db.close();
+  fs.unlinkSync(dbPath);
+});
+
+test('can insert a restaurant unit with capacity', () => {
+  const dbPath = path.join(__dirname, 'tmp-db4.db');
+  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+  const db = openDb(dbPath);
+
+  const biz = db.prepare(
+    `INSERT INTO businesses (name, email, password_hash, business_type, grace_window_minutes, deposit_required, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).run('Restaurant Biz', 'restaurant@test.com', 'hash', 'restaurant', 30, 1, new Date().toISOString());
+
+  const unitInfo = db.prepare(
+    `INSERT INTO units (business_id, name, capacity, created_at)
+     VALUES (?, ?, ?, ?)`
+  ).run(biz.lastInsertRowid, 'Table 4', 6, new Date().toISOString());
+
+  const unit = db.prepare('SELECT * FROM units WHERE id = ?').get(unitInfo.lastInsertRowid);
+  assert.equal(unit.capacity, 6);
+  assert.equal(unit.ps_type, null);
+  assert.equal(unit.hourly_rate, null);
   assert.equal(unit.status, 'empty');
 
   db.close();

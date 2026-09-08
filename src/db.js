@@ -12,7 +12,7 @@ function openDb(dbPath) {
       name TEXT NOT NULL,
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
-      business_type TEXT NOT NULL,
+      business_type TEXT NOT NULL CHECK (business_type IN ('gaming', 'restaurant')),
       grace_window_minutes INTEGER NOT NULL DEFAULT 60,
       deposit_required INTEGER NOT NULL DEFAULT 0,
       deposit_amount REAL,
